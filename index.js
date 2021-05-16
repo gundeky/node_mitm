@@ -1,13 +1,36 @@
+const fs = require('fs');
 const http = require('http');
 const https = require('https');
+const zlib = require('zlib');
 
 const listenPort = 8081;
 // const toAddr = { host: 'localhost', port: 8080, tls: false };
 const toAddr = { host: 'www.google.com', port: 443, tls: true };
 // const toAddr = { host: 'www.google.com', port: 80, tls: false };
 
-const replaceHost = true;
-const printData = true;
+const replaceHostEnabled = true;
+const dumpDataEnabled = true;
+const writeFileEnabled = true;
+
+function getLogFileName() {
+	function pad2(n) {
+		return (n < 10 ? '0' : '') + n;
+	}
+	const date = new Date();
+	const postfix = date.getFullYear().toString() + pad2(date.getMonth() + 1) + pad2(date.getDate()) + pad2(date.getHours()) + pad2(date.getMinutes()) + pad2(date.getSeconds());
+	return `log_${postfix}`;
+}
+
+const logFileName = getLogFileName();
+
+function print(str) {
+	// console.log(str.toString('utf8'));
+	console.log(str);
+	if (writeFileEnabled) {
+		// fs.appendFileSync(logFileName, str.toString('utf8'));
+		fs.appendFileSync(logFileName, str);
+	}
+}
 
 function callHTTP(cliPort, reqTls, reqHost, reqPort, reqPath, reqMethod, reqHeaders, reqBody, callback) {
 	const reqOptions = {
@@ -24,18 +47,32 @@ function callHTTP(cliPort, reqTls, reqHost, reqPort, reqPath, reqMethod, reqHead
 			resBody.push(chunk);
 		});
 		res.on('end', () => {
-			resBody = Buffer.concat(resBody).toString('utf8');
+			resBody = Buffer.concat(resBody);
 
 			let resLog = `HTTP/${res.httpVersion} ${res.statusCode} ${res.statusMessage}\n`
 			for (let i=0; i<res.rawHeaders.length; i+=2) {
 				resLog += `${res.rawHeaders[i]}: ${res.rawHeaders[i+1]}\n`;
 			}
 			resLog += '\n';
-			resLog += resBody;
-			if (printData) {
-				console.log('=====\n[data] svr->cli [' + cliPort + '][' + resLog.length + ']\n' + resLog.toString('utf8'));
+
+			if (res.headers['content-encoding'] === 'br') {
+				resLog += zlib.brotliDecompressSync(resBody);
+			} else if (res.headers['content-encoding'] === 'gzip') {
+				resLog += zlib.gunzipSync(resBody);
+			} else if (res.headers['content-encoding'] === 'compress') {
+				resLog += zlib.unzipSync(resBody);
+			} else if (res.headers['content-encoding'] === 'deflate') {
+				resLog += zlib.inflateSync(resBody);
+			} else if (res.headers['content-encoding'] === 'identity') {
+				resLog += resBody;
 			} else {
-				console.log('=====\n[data] svr->cli [' + cliPort + '][' + resLog.length + ']');
+				resLog += resBody;
+			}
+
+			if (dumpDataEnabled) {
+				print('=====\n[data] svr->cli [' + cliPort + '][' + resLog.length + ']\n' + resLog.toString('utf8'));
+			} else {
+				print('=====\n[data] svr->cli [' + cliPort + '][' + resLog.length + ']');
 			}
 			callback(null, res.statusCode, res.statusMessage, res.headers, resBody);
 			// console.log('No more data in response.');
@@ -59,7 +96,7 @@ http.createServer((req, res) => {
 		reqBody.push(chunk);
 	});
 	req.on('end', () => {
-		reqBody = Buffer.concat(reqBody).toString('utf8');
+		reqBody = Buffer.concat(reqBody);
 
 		const cliPort = req.socket.remotePort;
 		let reqLog = `${req.method} ${req.url} HTTP/${req.httpVersion}\n`
@@ -67,17 +104,31 @@ http.createServer((req, res) => {
 			reqLog += `${req.rawHeaders[i]}: ${req.rawHeaders[i+1]}\n`;
 		}
 		reqLog += '\n';
-		reqLog += reqBody;
-		if (printData) {
-			console.log('=====\n[data] cli->svr [' + cliPort + '][' + reqLog.length + ']\n' + reqLog.toString('utf8'));
+
+		if (req.headers['content-encoding'] === 'br') {
+			reqLog += zlib.brotliDecompreqsSync(reqBody);
+		} else if (req.headers['content-encoding'] === 'gzip') {
+			reqLog += zlib.gunzipSync(reqBody);
+		} else if (req.headers['content-encoding'] === 'compreqs') {
+			reqLog += zlib.unzipSync(reqBody);
+		} else if (req.headers['content-encoding'] === 'deflate') {
+			reqLog += zlib.inflateSync(reqBody);
+		} else if (req.headers['content-encoding'] === 'identity') {
+			reqLog += reqBody;
 		} else {
-			console.log('=====\n[data] cli->svr [' + cliPort + '][' + reqLog.length + ']');
+			reqLog += reqBody;
+		}
+
+		if (dumpDataEnabled) {
+			print('=====\n[data] cli->svr [' + cliPort + '][' + reqLog.length + ']\n' + reqLog.toString('utf8'));
+		} else {
+			print('=====\n[data] cli->svr [' + cliPort + '][' + reqLog.length + ']');
 		}
 
 		const tempReqHeaders = JSON.parse(JSON.stringify(req.headers));
 		delete tempReqHeaders['content-length'];
 		delete tempReqHeaders['transfer-encoding'];
-		if (tempReqHeaders['host']) {
+		if (replaceHostEnabled && tempReqHeaders['host']) {
 			const hostString = toAddr.host + (toAddr.port === 80 ? '' : ':' + toAddr.port);
 			tempReqHeaders['host'] = hostString;
 		}
@@ -91,34 +142,5 @@ http.createServer((req, res) => {
 			res.end(resBody);
 		});
 	});
-
-	// if (req.method == 'POST' || req.method == 'PUT') {
-	// 	// let body = [];
-	// 	// request.on('data', (chunk) => {
-	// 	// 	body.push(chunk);
-	// 	// }).on('end', () => {
-	// 	// 	body = Buffer.concat(body).toString();
-	// 	// 	// 여기서 `body`에 전체 요청 바디가 문자열로 담겨있습니다.
-	// 	// });
-	// }
-	// else {
-	// 	let data = `${req.method} ${req.url} HTTP/${req.httpVersion}\n`
-	// 	for (let i=0; i<req.rawHeaders.length; i+=2) {
-	// 		data += `${req.rawHeaders[i]}: ${req.rawHeaders[i+1]}\n`;
-	// 	}
-    //
-	// 	// if (printData) {
-	// 	// 	console.log('=====\n[data] cli->svr [' + cliPort + '][' + data.length + ']\n' + data.toString('utf8'));
-	// 	// } else {
-	// 	// 	console.log('=====\n[data] cli->svr [' + cliPort + '][' + data.length + ']');
-	// 	// }
-    //
-	// 	// console.log('req.url:', req.url);
-	// 	// console.log('req.method:',   req.method);
-	// 	// console.log('req.headers', JSON.stringify(req.headers, null, 2));
-    //
-	// 	res.write('Hello World!');
-	// 	res.end();
-	// }
 }).listen(listenPort);
 

@@ -5,8 +5,11 @@ const zlib = require('zlib');
 
 const listenPort = 8081;
 // const toAddr = { host: 'localhost', port: 8080, tls: false };
-const toAddr = { host: 'www.google.com', port: 443, tls: true };
+// const toAddr = { host: 'www.google.com', port: 443, tls: true };
 // const toAddr = { host: 'www.google.com', port: 80, tls: false };
+const toAddr = { host: 'localhost', port: 5232, tls: false };
+
+const auth = 'Basic a2VuLmxlZToxMTEx';
 
 const replaceHostEnabled = true;
 const dumpDataEnabled = true;
@@ -70,16 +73,21 @@ function callHTTP(cliPort, reqTls, reqHost, reqPort, reqPath, reqMethod, reqHead
 			}
 
 			if (dumpDataEnabled) {
-				print('=====\n[data] svr->cli [' + cliPort + '][' + resLog.length + ']\n' + resLog.toString('utf8'));
+				print('\n\n=====\n[data] svr->cli [' + cliPort + '][' + resLog.length + ']\n' + resLog.toString('utf8'));
 			} else {
-				print('=====\n[data] svr->cli [' + cliPort + '][' + resLog.length + ']');
+				print('\n\n=====\n[data] svr->cli [' + cliPort + '][' + resLog.length + ']');
 			}
 			callback(null, res.statusCode, res.statusMessage, res.headers, resBody);
 			// console.log('No more data in response.');
 		});
+		res.on('error', (e) => {
+			console.error('server response error:', e);
+			callback(e);
+		});
 	});
 
 	req.on('error', (e) => {
+		console.error('server request error:', e);
 		callback(e);
 	});
 
@@ -120,9 +128,9 @@ http.createServer((req, res) => {
 		}
 
 		if (dumpDataEnabled) {
-			print('=====\n[data] cli->svr [' + cliPort + '][' + reqLog.length + ']\n' + reqLog.toString('utf8'));
+			print('\n\n=====\n[data] cli->svr [' + cliPort + '][' + reqLog.length + ']\n' + reqLog.toString('utf8'));
 		} else {
-			print('=====\n[data] cli->svr [' + cliPort + '][' + reqLog.length + ']');
+			print('\n\n=====\n[data] cli->svr [' + cliPort + '][' + reqLog.length + ']');
 		}
 
 		const tempReqHeaders = JSON.parse(JSON.stringify(req.headers));
@@ -132,15 +140,24 @@ http.createServer((req, res) => {
 			const hostString = toAddr.host + (toAddr.port === 80 ? '' : ':' + toAddr.port);
 			tempReqHeaders['host'] = hostString;
 		}
+		if (auth) {
+			tempReqHeaders['authorization'] = auth;
+		}
 
-		callHTTP(cliPort, toAddr.tls, toAddr.host, toAddr.port, req.url, req.method, tempReqHeaders, reqBody,
-				(e, resStatusCode, resStatusMessage, resHeaders, resBody) => {
+		callHTTP(cliPort, toAddr.tls, toAddr.host, toAddr.port, req.url, req.method, tempReqHeaders, reqBody, (e, resStatusCode, resStatusMessage, resHeaders, resBody) => {
+			if (e) {
+				console.error('callHTTP error:', e);
+				return;
+			}
 			const tempResHeaders = JSON.parse(JSON.stringify(resHeaders));
 			delete tempResHeaders['content-length'];
 			delete tempResHeaders['transfer-encoding'];
 			res.writeHead(resStatusCode, resStatusMessage, tempResHeaders);
 			res.end(resBody);
 		});
+	});
+	req.on('error', (e) => {
+		console.error('client request error:', e);
 	});
 }).listen(listenPort);
 
